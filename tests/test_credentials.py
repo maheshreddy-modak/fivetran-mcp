@@ -80,3 +80,29 @@ def test_unknown_mode_raises(monkeypatch):
     monkeypatch.delenv("FIVETRAN_API_SECRET", raising=False)
     with pytest.raises(ValueError, match="Unknown transport mode"):
         select_credentials_resolver("http")
+
+
+def test_bearer_as_basic_relabels_bearer_header():
+    assert server._bearer_as_basic("Bearer abc123==") == "Basic abc123=="
+    assert server._bearer_as_basic("bearer abc123==") == "Basic abc123=="
+
+
+def test_bearer_as_basic_leaves_other_schemes_untouched():
+    assert server._bearer_as_basic("Basic abc123==") == "Basic abc123=="
+    assert server._bearer_as_basic("Bearer ") == "Bearer "
+    assert server._bearer_as_basic("") == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag, expected", [("true", "Basic abc123=="), (None, "Bearer abc123==")])
+async def test_header_resolver_bearer_as_basic_is_opt_in(monkeypatch, flag, expected):
+    async def fake_forward():
+        return server.Credentials(authorization="Bearer abc123==")
+
+    monkeypatch.setattr(server, "_forward_authorization_header", fake_forward)
+    if flag is None:
+        monkeypatch.delenv("FIVETRAN_BEARER_AS_BASIC", raising=False)
+    else:
+        monkeypatch.setenv("FIVETRAN_BEARER_AS_BASIC", flag)
+    creds = await server.header_resolver()()
+    assert creds.authorization == expected

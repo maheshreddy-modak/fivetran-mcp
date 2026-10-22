@@ -151,10 +151,28 @@ def _resolve_client_name() -> str:
     return _raw_client_identifier() or "unknown"
 
 
+def _bearer_as_basic(authorization: str) -> str:
+    """Re-label "Bearer <base64(key:secret)>" as "Basic <base64(key:secret)>".
+
+    For clients that can only send a Bearer token. Fivetran's REST API accepts
+    only Basic, so the token must already be the base64 of "key:secret".
+    """
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and token.strip():
+        return f"Basic {token.strip()}"
+    return authorization
+
+
 def header_resolver() -> CredentialsResolver:
-    """HTTP mode without OAuth: caller supplies valid Fivetran credentials."""
+    """HTTP mode without OAuth: caller supplies valid Fivetran credentials.
+
+    With FIVETRAN_BEARER_AS_BASIC=true, a Bearer header is forwarded as Basic.
+    """
     async def _resolve() -> Credentials:
-        return await _forward_authorization_header()
+        creds = await _forward_authorization_header()
+        if os.getenv("FIVETRAN_BEARER_AS_BASIC", "").strip().lower() == "true":
+            return Credentials(authorization=_bearer_as_basic(creds.authorization))
+        return creds
 
     return _resolve
 

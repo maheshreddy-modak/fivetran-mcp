@@ -20,8 +20,10 @@ _DISCOVERY_NAMES = {"list_endpoints", "get_schema"}
 
 
 @pytest.fixture(autouse=True)
-def reset_server_state():
+def reset_server_state(monkeypatch):
     """Drop grants and generated tools between tests. Discovery tools stay put."""
+    # server.py loads the repo .env at import; keep deployment-only flags out of tests.
+    monkeypatch.delenv("FIVETRAN_BEARER_AS_BASIC", raising=False)
     yield
     server.ALLOWED_GRANTS = set()
     server.SCOPE_ACTIONS = ()
