@@ -1,0 +1,10 @@
+services:
+  fivetran-mcp:
+    build: .
+    container_name: fivetran-mcp
+    env_file: .env
+    ports:
+      # Published on all interfaces so other devices can connect.
+      # Use "127.0.0.1:${MCP_PORT:-8000}:8000" to restrict to this machine.
+      - "${MCP_PORT:-8000}:8000"
+    restart: unless-stopped
