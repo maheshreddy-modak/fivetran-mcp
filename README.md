@@ -13,7 +13,8 @@ An MCP server that you can use to interact with your Fivetran environment. It al
 The server exposes two discovery tools plus one execution tool for each allowed resource/action pair:
 
 - `list_endpoints` discovers API endpoints. Call it without arguments for category counts, with `category` to list a resource such as `connections`, or with `search` to find endpoints by name, summary, or path.
-- `get_schema` returns the parameters, request body, and response schema for an endpoint. For connection and destination create/modify endpoints, pass `service` (for example, `postgres`) to include the service-specific configuration fields.
+- `get_schema` returns the parameters and a flat table of request body fields for an endpoint; pass `include_response=true` to also list the response fields. For connection and destination create/modify endpoints, pass `service` (for example, `postgres`) to include the service-specific configuration fields. An unknown `service` suggests close matches (for example, `databricks` → `databricks_db`).
+- Results are rendered compactly for the model's context window: lists as pipe-delimited rows (at most 100 per call, with a footer naming the next `cursor`), single records as JSON without indentation or empty fields, errors as JSON. A `limit` above 100 is capped at 100.
 - `<resource>_<action>` tools execute endpoints in that group. Examples include `connections_read`, `connections_write`, and `destinations_delete`. Pass the endpoint `name` plus any `path_params`, `query`, or `body` values required by its schema.
 
 The generated execution tools are filtered by `FIVETRAN_SCOPE` and `DISALLOWED_ACTIONS`, so clients only see operations allowed by the server configuration. A typical workflow is:

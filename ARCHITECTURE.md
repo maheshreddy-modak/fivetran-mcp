@@ -42,6 +42,8 @@ fivetran-open-api-definition.json  +  endpoint_overrides.json
   tool generation, request handling, both transport entrypoints.
 - `auth.py` — OAuth 2.1 resource-server plumbing for streamable-http mode.
   Imported only when `FIVETRAN_AUTH_ISSUER` is set.
+- `formatting.py` — renders tool results as compact text for the model's
+  context window (see "Result rendering").
 - `split_openapi_by_endpoint.py` — build-time script that turns the full
   OpenAPI spec into `open-api-definitions/`.
 - `endpoint_overrides.json` — flat `operationId → prepend text` map consumed
@@ -244,7 +246,8 @@ Every session exposes:
   and the name isn't in `ENDPOINT_DENIES`). The no-argument summary returns
   `categories` (total per resource) and `callable_counts` (currently callable
   per resource).
-- `get_schema(name, service?)` — full schema for one endpoint, callable or not.
+- `get_schema(name, service?, include_response?)` — schema for one endpoint,
+  callable or not, rendered as a request-field table (see "Result rendering").
 - One `<resource>_<action>` tool per allowed pair — execution.
 
 **Why grouped tools instead of one per endpoint?** The manifest carries well
@@ -413,6 +416,37 @@ above) it's documented here, not in the README.
   `fivetran-mcp --transport streamable-http --host 0.0.0.0 --port 8000`.
   TLS terminates upstream (load balancer/ingress) — nothing TLS-related in
   the image itself.
+
+### Result rendering
+
+The `do_*` handlers return plain dicts; `call_tool` passes them through
+`formatting.py` right before they become `TextContent`. Raw upstream JSON
+with `indent=2` used to flood clients' context windows — one
+`metadata_connectors` call with `limit=1000` is 1.4MB, and a single
+`get_schema` for a connection endpoint carries ~20KB of response schema the
+agent never needs to build a request.
+
+- **Lists** (`data.items` or a bare `data` list) render as pipe-delimited
+  rows, header first, no padding. `CURATED_COLUMNS` picks the columns for
+  the hot listings (connector catalogs, groups, connections, destinations);
+  everything else keeps every non-empty column. Sub-records flatten to dotted
+  columns (`status.setup_state`); maps of objects keyed by name collapse to
+  their key names so dynamic keys can't explode into sparse columns. Rows cap
+  at `MAX_ROWS` (100), cells at `MAX_CELL_CHARS`. The footer gives the row
+  count and either the upstream `next_cursor` or, for endpoints without
+  paging, where to look instead.
+- **`limit`** above `MAX_ROWS` is clamped before the upstream call and the
+  result notes it.
+- **Single records** render as JSON without indentation or null/empty fields;
+  `setup_tests` becomes a `title|status|message` table, and schema/column
+  configs become one row per table/column.
+- **`get_schema`** renders method, path, description, parameters and a flat
+  `field|type|required|allowed|description` table of request-body fields.
+  `allowed` cells are never truncated, since a cut enum list would silently
+  drop valid values. The response schema is only included with
+  `include_response=true`. With `service`, the top-level `service` enum
+  narrows to that value.
+- **Errors** stay JSON so the error contract below still holds.
 
 ### Error contract
 

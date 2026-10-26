@@ -2,7 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY pyproject.toml ./
-COPY server.py auth.py ./
+COPY server.py auth.py formatting.py ./
 COPY open-api-definitions ./open-api-definitions
 
 RUN pip install --no-cache-dir . \
