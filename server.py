@@ -12,6 +12,7 @@ import argparse
 import base64
 import contextlib
 import contextvars
+import difflib
 import hashlib
 import json
 import os
@@ -43,6 +44,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
+
+import formatting
 
 load_dotenv()
 
@@ -479,10 +482,22 @@ def load_endpoint_schema(schema_file: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _similar_services(kind: str, service: str, limit: int = 8) -> list[str]:
+    known = sorted(p.stem for p in (OPENAPI_DIR / "_service-configs" / kind).glob("*.json"))
+    needle = service.lower()
+    substring = [s for s in known if needle in s or s in needle]
+    close = difflib.get_close_matches(needle, known, n=limit, cutoff=0.7)
+    return list(dict.fromkeys(substring + close))[:limit]
+
+
 def _load_service_config(kind: str, service: str) -> dict[str, Any]:
     path = OPENAPI_DIR / "_service-configs" / kind / f"{service}.json"
     if not path.exists():
-        raise ValueError(f"Unknown {kind[:-1]} service: {service!r}")
+        # Without suggestions agents fall back to dumping the whole connector
+        # catalog to find the right id (e.g. 'databricks' -> 'databricks_db').
+        similar = _similar_services(kind, service)
+        hint = f" Did you mean: {', '.join(similar)}?" if similar else ""
+        raise ValueError(f"Unknown {kind[:-1]} service: {service!r}.{hint}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -767,10 +782,11 @@ _TOOLS = [
     Tool(
         name="get_schema",
         description=(
-            "Return the full schema for a Fivetran endpoint — description, parameters, "
-            "request body schema, response schema. Provide `service` (e.g. 'postgres') "
-            "on create_connection / modify_connection / create_destination / "
-            "modify_destination to splice in the per-service config shape."
+            "Return the schema for a Fivetran endpoint — description, parameters and "
+            "a flat table of request body fields (field|type|required|allowed|description). "
+            "Provide `service` (e.g. 'postgres') on create_connection / modify_connection / "
+            "create_destination / modify_destination to splice in the per-service config "
+            "shape. The response schema is omitted unless include_response=true."
         ),
         inputSchema={
             "type": "object",
@@ -782,6 +798,10 @@ _TOOLS = [
                 "service": {
                     "type": "string",
                     "description": "Service identifier (e.g., 'postgres', 'salesforce'). Only meaningful for create/modify connection or destination endpoints.",
+                },
+                "include_response": {
+                    "type": "boolean",
+                    "description": "Also list the response fields. Default: false.",
                 },
             },
             "required": ["name"],
@@ -945,29 +965,34 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     _upstream_status.set(None)
     try:
         if name == "list_endpoints":
-            result = do_list_endpoints(
+            text = formatting.render_endpoint_list(do_list_endpoints(
                 category=arguments.get("category"),
                 search=arguments.get("search"),
                 include_deprecated=bool(arguments.get("include_deprecated", False)),
-            )
+            ))
         elif name == "get_schema":
-            result = do_get_schema(
-                name=arguments["name"],
+            text = formatting.render_schema(
+                do_get_schema(name=arguments["name"], service=arguments.get("service")),
+                include_response=bool(arguments.get("include_response", False)),
                 service=arguments.get("service"),
             )
         elif name in TOOLS_BY_NAME:
             creds = await _resolve_credentials()
+            query, note = formatting.clamp_limit(arguments.get("query"))
             result = await do_call(
                 creds,
                 name=arguments["name"],
                 path_params=arguments.get("path_params"),
-                query=arguments.get("query"),
+                query=query,
                 body=arguments.get("body"),
                 expected_pair=TOOLS_BY_NAME[name],
             )
+            text = formatting.render_api_result(arguments["name"], result, note)
         else:
-            result = {"error": "UNKNOWN_TOOL", "message": f"Unknown tool: {name!r}"}
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+            text = formatting.compact_json(
+                {"error": "UNKNOWN_TOOL", "message": f"Unknown tool: {name!r}"}
+            )
+        return [TextContent(type="text", text=text)]
 
     except CredentialsError as e:
         return [TextContent(
